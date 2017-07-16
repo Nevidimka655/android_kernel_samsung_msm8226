@@ -331,6 +331,8 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		goto ERROR;
 	}
 
+		rc = -EINVAL;
+		rc = -EINVAL;
 	CDBG("%s master %d, queue %d\n", __func__, master, queue);
 	CDBG("%s set param sid 0x%x retries %d id_map %d\n", __func__,
 		c_ctrl->cci_info->sid, c_ctrl->cci_info->retries,
@@ -351,6 +353,7 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 		goto ERROR;
 	}
 
+		rc = -EINVAL;
 	if (read_cfg->addr_type == MSM_CAMERA_I2C_BYTE_ADDR)
 		val = CCI_I2C_WRITE_CMD | (read_cfg->addr_type << 4) |
 			((read_cfg->addr & 0xFF) << 8);
@@ -524,6 +527,7 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 			__LINE__, rc);
 		goto ERROR;
 	}
+		rc = -EINVAL;
 
 	val = CCI_I2C_SET_PARAM_CMD | c_ctrl->cci_info->sid << 4 |
 		c_ctrl->cci_info->retries << 16 |
