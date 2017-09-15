@@ -1608,7 +1608,7 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 {
 	struct msm_actuator_cfg_data *cdata =
 		(struct msm_actuator_cfg_data *)argp;
-	int32_t rc = -EINVAL;
+	int32_t rc = 0;
 	if (!a_ctrl) {
 		pr_err("failed\n");
 		return -EINVAL;
@@ -1630,8 +1630,6 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	case CFG_SET_DEFAULT_FOCUS:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_set_default_focus)	
 			rc = a_ctrl->func_tbl->actuator_set_default_focus(	
 				a_ctrl, &cdata->cfg.move);		
 		if (rc < 0)
@@ -1639,8 +1637,6 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	case CFG_MOVE_FOCUS:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_move_focus)	
 			rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl,	
 				&cdata->cfg.move);	
 		if (rc < 0)
@@ -1648,8 +1644,6 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	case CFG_SET_POSITION:
-		if (a_ctrl->func_tbl &&
-			a_ctrl->func_tbl->actuator_set_position)	
 			rc = a_ctrl->func_tbl->actuator_set_position(a_ctrl,	
 				&cdata->cfg.setpos);	
 		if (rc < 0)
