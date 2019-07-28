@@ -1760,7 +1760,7 @@ exit_free:
 	kfree(buf);
 	return -ENOMEM;
 }
-static int mdss_panel_dt_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
+int mdss_panel_dt_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
 				char *dst_format)
 {
 	int rc = 0;
@@ -2160,7 +2160,7 @@ static ssize_t mipi_samsung_disp_acl_show(struct device *dev,
 {
 	int rc;
 
-	rc = snprintf((char *)buf, sizeof(buf), "%d\n", msd.dstat.acl_on);
+	rc = snprintf((char *)buf, PAGE_SIZE, "%d\n", msd.dstat.acl_on);
 	printk("acl status: %d\n", *buf);
 
 	return rc;
@@ -2281,7 +2281,7 @@ static ssize_t mdss_s6e8aa0a_auto_brightness_show(struct device *dev,
 {
 	int rc;
 
-	rc = snprintf(buf, sizeof(buf), "%d\n",
+	rc = snprintf(buf, PAGE_SIZE, "%d\n",
 					msd.dstat.auto_brightness);
 	pr_info("%s : auto_brightness : %d\n", __func__, msd.dstat.auto_brightness);
 
