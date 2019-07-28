@@ -84,3 +84,11 @@ GTAGS
 *.orig
 *~
 \#*#
+
+#
+# Build files and toolchain
+#
+output
+output/*
+arm-linux-androideabi-4.9
+arm-linux-androideabi-4.9/*

@@ -107,20 +107,21 @@ found:
  *	0 - deliver
  *	1 - block
  */
-static int icmpv6_filter(const struct sock *sk, const struct sk_buff *skb)
+static __inline__ int icmpv6_filter(struct sock *sk, struct sk_buff *skb)
 {
-	struct icmp6hdr *_hdr;
-	const struct icmp6hdr *hdr;
+	struct icmp6hdr *icmph;
+	struct raw6_sock *rp = raw6_sk(sk);
 
-	hdr = skb_header_pointer(skb, skb_transport_offset(skb),
-				 sizeof(_hdr), &_hdr);
-	if (hdr) {
-		const __u32 *data = &raw6_sk(sk)->filter.data[0];
-		unsigned int type = hdr->icmp6_type;
+	if (pskb_may_pull(skb, sizeof(struct icmp6hdr))) {
+		__u32 *data = &rp->filter.data[0];
+		int bit_nr;
 
-		return (data[type >> 5] & (1U << (type & 31))) != 0;
+		icmph = (struct icmp6hdr *) skb->data;
+		bit_nr = icmph->icmp6_type;
+
+		return (data[bit_nr >> 5] & (1 << (bit_nr & 31))) != 0;
 	}
-	return 1;
+	return 0;
 }
 
 #if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
@@ -483,7 +484,7 @@ static int rawv6_recvmsg(struct kiocb *iocb, struct sock *sk,
 			goto csum_copy_err;
 		err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
 	} else {
-		err = skb_copy_and_csum_datagram_iovec(skb, 0, msg->msg_iov);
+		err = skb_copy_and_csum_datagram_iovec(skb, 0, msg->msg_iov, copied);
 		if (err == -EINVAL)
 			goto csum_copy_err;
 	}
@@ -617,6 +618,8 @@ static int rawv6_send_hdrinc(struct sock *sk, void *from, int length,
 		ipv6_local_error(sk, EMSGSIZE, fl6, rt->dst.dev->mtu);
 		return -EMSGSIZE;
 	}
+	if (length < sizeof(struct ipv6hdr))
+		return -EINVAL;
 	if (flags&MSG_PROBE)
 		goto out;
 
@@ -727,7 +730,6 @@ static int rawv6_probe_proto_opt(struct flowi6 *fl6, struct msghdr *msg)
 static int rawv6_sendmsg(struct kiocb *iocb, struct sock *sk,
 		   struct msghdr *msg, size_t len)
 {
-	struct ipv6_txoptions *opt_to_free = NULL;
 	struct ipv6_txoptions opt_space;
 	struct sockaddr_in6 * sin6 = (struct sockaddr_in6 *) msg->msg_name;
 	struct in6_addr *daddr, *final_p, final;
@@ -835,10 +837,8 @@ static int rawv6_sendmsg(struct kiocb *iocb, struct sock *sk,
 		if (!(opt->opt_nflen|opt->opt_flen))
 			opt = NULL;
 	}
-	if (!opt) {
-		opt = txopt_get(np);
-		opt_to_free = opt;
-	}
+	if (opt == NULL)
+		opt = np->opt;
 	if (flowlabel)
 		opt = fl6_merge_options(&opt_space, flowlabel, opt);
 	opt = ipv6_fixup_options(&opt_space, opt);
@@ -905,7 +905,6 @@ done:
 	dst_release(dst);
 out:
 	fl6_sock_release(flowlabel);
-	txopt_put(opt_to_free);
 	return err<0?err:len;
 do_confirm:
 	dst_confirm(dst);

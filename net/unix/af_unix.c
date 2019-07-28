@@ -114,7 +114,6 @@
 #include <linux/mount.h>
 #include <net/checksum.h>
 #include <linux/security.h>
-#include <linux/freezer.h>
 
 struct hlist_head unix_socket_table[UNIX_HASH_SIZE + 1];
 EXPORT_SYMBOL_GPL(unix_socket_table);
@@ -333,7 +332,7 @@ found:
  */
 
 static int unix_dgram_peer_wake_relay(wait_queue_t *q, unsigned mode, int flags,
-				      void *key)
+		void *key)
 {
 	struct unix_sock *u;
 	wait_queue_head_t *u_sleep;
@@ -341,7 +340,7 @@ static int unix_dgram_peer_wake_relay(wait_queue_t *q, unsigned mode, int flags,
 	u = container_of(q, struct unix_sock, peer_wake);
 
 	__remove_wait_queue(&unix_sk(u->peer_wake.private)->peer_wait,
-			    q);
+			q);
 	u->peer_wake.private = NULL;
 
 	/* relaying can only happen while the wq still exists */
@@ -374,7 +373,7 @@ static int unix_dgram_peer_wake_connect(struct sock *sk, struct sock *other)
 }
 
 static void unix_dgram_peer_wake_disconnect(struct sock *sk,
-					    struct sock *other)
+		struct sock *other)
 {
 	struct unix_sock *u, *u_other;
 
@@ -391,13 +390,13 @@ static void unix_dgram_peer_wake_disconnect(struct sock *sk,
 }
 
 static void unix_dgram_peer_wake_disconnect_wakeup(struct sock *sk,
-						   struct sock *other)
+		struct sock *other)
 {
 	unix_dgram_peer_wake_disconnect(sk, other);
 	wake_up_interruptible_poll(sk_sleep(sk),
-				   POLLOUT |
-				   POLLWRNORM |
-				   POLLWRBAND);
+			POLLOUT |
+			POLLWRNORM |
+			POLLWRBAND);
 }
 
 /* preconditions:
@@ -470,7 +469,7 @@ static void unix_sock_destructor(struct sock *sk)
 	WARN_ON(!sk_unhashed(sk));
 	WARN_ON(sk->sk_socket);
 	if (!sock_flag(sk, SOCK_DEAD)) {
-		printk(KERN_INFO "Attempt to release alive unix socket: %p\n", sk);
+		WARN(1, "Attempt to release alive unix socket: %p\n", sk);
 		return;
 	}
 
@@ -1452,7 +1451,7 @@ static void unix_detach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 	UNIXCB(skb).fp = NULL;
 
 	for (i = scm->fp->count-1; i >= 0; i--)
-		unix_notinflight(scm->fp->fp[i]);
+		unix_notinflight(scm->fp->user, scm->fp->fp[i]);
 }
 
 static void unix_destruct_scm(struct sk_buff *skb)
@@ -1470,6 +1469,21 @@ static void unix_destruct_scm(struct sk_buff *skb)
 	sock_wfree(skb);
 }
 
+/*
+ * The "user->unix_inflight" variable is protected by the garbage
+ * collection lock, and we just read it locklessly here. If you go
+ * over the limit, there might be a tiny race in actually noticing
+ * it across threads. Tough.
+ */
+static inline bool too_many_unix_fds(struct task_struct *p)
+{
+	struct user_struct *user = current_user();
+
+	if (unlikely(user->unix_inflight > task_rlimit(p, RLIMIT_NOFILE)))
+		return !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN);
+	return false;
+}
+
 #define MAX_RECURSION_LEVEL 4
 
 static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
@@ -1477,6 +1491,9 @@ static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 	int i;
 	unsigned char max_level = 0;
 	int unix_sock_count = 0;
+
+	if (too_many_unix_fds(current))
+		return -ETOOMANYREFS;
 
 	for (i = scm->fp->count - 1; i >= 0; i--) {
 		struct sock *sk = unix_get_socket(scm->fp->fp[i]);
@@ -1499,10 +1516,8 @@ static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 	if (!UNIXCB(skb).fp)
 		return -ENOMEM;
 
-	if (unix_sock_count) {
-		for (i = scm->fp->count - 1; i >= 0; i--)
-			unix_inflight(scm->fp->fp[i]);
-	}
+	for (i = scm->fp->count - 1; i >= 0; i--)
+		unix_inflight(scm->fp->user, scm->fp->fp[i]);
 	return max_level;
 }
 
@@ -2017,12 +2032,8 @@ static long unix_stream_data_wait(struct sock *sk, long timeo)
 
 		set_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
 		unix_state_unlock(sk);
-		timeo = freezable_schedule_timeout(timeo);
+		timeo = schedule_timeout(timeo);
 		unix_state_lock(sk);
-
-		if (sock_flag(sk, SOCK_DEAD))
-			break;
-
 		clear_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
 	}
 
@@ -2084,10 +2095,6 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 		struct sk_buff *skb;
 
 		unix_state_lock(sk);
-		if (sock_flag(sk, SOCK_DEAD)) {
-			err = -ECONNRESET;
-			goto unlock;
-		}
 		skb = skb_peek(&sk->sk_receive_queue);
 again:
 		if (skb == NULL) {
@@ -2138,7 +2145,7 @@ again:
 			if ((UNIXCB(skb).pid  != siocb->scm->pid) ||
 			    (UNIXCB(skb).cred != siocb->scm->cred))
 				break;
-		} else if (test_bit(SOCK_PASSCRED, &sock->flags)) {
+		} else {
 			/* Copy credentials */
 			scm_set_cred(siocb->scm, UNIXCB(skb).pid, UNIXCB(skb).cred);
 			check_creds = 1;

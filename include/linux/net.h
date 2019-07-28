@@ -19,6 +19,7 @@
 #define _LINUX_NET_H
 
 #include <linux/socket.h>
+#include <linux/sched.h>
 #include <asm/socket.h>
 
 #define NPROTO		AF_MAX
@@ -72,7 +73,6 @@ struct net;
 #define SOCK_NOSPACE		2
 #define SOCK_PASSCRED		3
 #define SOCK_PASSSEC		4
-#define SOCK_EXTERNALLY_ALLOCATED 5
 
 #ifndef ARCH_HAS_SOCKET_TYPES
 /**

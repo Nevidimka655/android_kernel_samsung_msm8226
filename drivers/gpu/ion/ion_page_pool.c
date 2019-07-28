@@ -21,6 +21,8 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
+#include <linux/swap.h>
 #include "ion_priv.h"
 
 struct ion_page_pool_item {
@@ -30,16 +32,21 @@ struct ion_page_pool_item {
 
 static void *ion_page_pool_alloc_pages(struct ion_page_pool *pool)
 {
-	struct page *page = alloc_pages(pool->gfp_mask, pool->order);
+	struct page *page;
+
+	page = alloc_pages(pool->gfp_mask & ~__GFP_ZERO, pool->order);
 
 	if (!page)
 		return NULL;
-	/* this is only being used to flush the page for dma,
-	   this api is not really suitable for calling from a driver
-	   but no better way to flush a page for dma exist at this time */
-	__dma_page_cpu_to_dev(page, 0, PAGE_SIZE << pool->order,
-			      DMA_BIDIRECTIONAL);
+
+	if (pool->gfp_mask & __GFP_ZERO)
+		if (ion_heap_high_order_page_zero(page, pool->order))
+			goto error_free_pages;
+
 	return page;
+error_free_pages:
+	__free_pages(page, pool->order);
+	return NULL;
 }
 
 static void ion_page_pool_free_pages(struct ion_page_pool *pool,
@@ -92,22 +99,25 @@ static struct page *ion_page_pool_remove(struct ion_page_pool *pool, bool high)
 	return page;
 }
 
-void *ion_page_pool_alloc(struct ion_page_pool *pool)
+void *ion_page_pool_alloc(struct ion_page_pool *pool, bool *from_pool)
 {
 	struct page *page = NULL;
 
 	BUG_ON(!pool);
 
-	mutex_lock(&pool->mutex);
-	if (pool->high_count)
-		page = ion_page_pool_remove(pool, true);
-	else if (pool->low_count)
-		page = ion_page_pool_remove(pool, false);
-	mutex_unlock(&pool->mutex);
+	*from_pool = true;
 
-	if (!page)
+	if (mutex_trylock(&pool->mutex)) {
+		if (pool->high_count)
+			page = ion_page_pool_remove(pool, true);
+		else if (pool->low_count)
+			page = ion_page_pool_remove(pool, false);
+		mutex_unlock(&pool->mutex);
+	}
+	if (!page) {
 		page = ion_page_pool_alloc_pages(pool);
-
+		*from_pool = false;
+	}
 	return page;
 }
 
@@ -138,6 +148,9 @@ int ion_page_pool_shrink(struct ion_page_pool *pool, gfp_t gfp_mask,
 	bool high;
 
 	high = gfp_mask & __GFP_HIGHMEM;
+
+	if (current_is_kswapd())
+		high = 1;
 
 	if (nr_to_scan == 0)
 		return ion_page_pool_total(pool, high);

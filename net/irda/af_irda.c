@@ -1104,6 +1104,9 @@ static int irda_create(struct net *net, struct socket *sock, int protocol,
 	struct sock *sk;
 	struct irda_sock *self;
 
+	if (protocol < 0 || protocol > SK_PROTOCOL_MAX)
+		return -EINVAL;
+
 	IRDA_DEBUG(2, "%s()\n", __func__);
 
 	if (net != &init_net)
@@ -1385,8 +1388,6 @@ static int irda_recvmsg_dgram(struct kiocb *iocb, struct socket *sock,
 	int err;
 
 	IRDA_DEBUG(4, "%s()\n", __func__);
-
-	msg->msg_namelen = 0;
 
 	skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
 				flags & MSG_DONTWAIT, &err);
@@ -2586,10 +2587,8 @@ bed:
 				    NULL, NULL, NULL);
 
 		/* Check if the we got some results */
-		if (!self->cachedaddr) {
-			err = -EAGAIN;		/* Didn't find any devices */
-			goto out;
-		}
+		if (!self->cachedaddr)
+			return -EAGAIN;		/* Didn't find any devices */
 		daddr = self->cachedaddr;
 		/* Cleanup */
 		self->cachedaddr = 0;

@@ -2044,7 +2044,7 @@ sctp_disposition_t sctp_sf_do_5_2_4_dupcook(const struct sctp_endpoint *ep,
 	}
 
 	/* Delete the tempory new association. */
-	sctp_add_cmd_sf(commands, SCTP_CMD_SET_ASOC, SCTP_ASOC(new_asoc));
+	sctp_add_cmd_sf(commands, SCTP_CMD_NEW_ASOC, SCTP_ASOC(new_asoc));
 	sctp_add_cmd_sf(commands, SCTP_CMD_DELETE_TCB, SCTP_NULL());
 
 	/* Restore association pointer to provide SCTP command interpeter
@@ -3349,6 +3349,12 @@ sctp_disposition_t sctp_sf_ootb(const struct sctp_endpoint *ep,
 			return sctp_sf_violation_chunklen(ep, asoc, type, arg,
 						  commands);
 
+		/* Report violation if chunk len overflows */
+		ch_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
+		if (ch_end > skb_tail_pointer(skb))
+			return sctp_sf_violation_chunklen(ep, asoc, type, arg,
+						  commands);
+
 		/* Now that we know we at least have a chunk header,
 		 * do things that are type appropriate.
 		 */
@@ -3379,12 +3385,6 @@ sctp_disposition_t sctp_sf_ootb(const struct sctp_endpoint *ep,
 				}
 			}
 		}
-
-		/* Report violation if chunk len overflows */
-		ch_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
-		if (ch_end > skb_tail_pointer(skb))
-			return sctp_sf_violation_chunklen(ep, asoc, type, arg,
-						  commands);
 
 		ch = (sctp_chunkhdr_t *) ch_end;
 	} while (ch_end < skb_tail_pointer(skb));

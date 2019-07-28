@@ -191,8 +191,6 @@ struct dentry_operations {
 #define DCACHE_MANAGED_DENTRY \
 	(DCACHE_MOUNTED|DCACHE_NEED_AUTOMOUNT|DCACHE_MANAGE_TRANSIT)
 
-#define DCACHE_DENTRY_KILLED	0x100000
-
 extern seqlock_t rename_lock;
 
 static inline int dname_external(struct dentry *dentry)
@@ -401,5 +399,12 @@ static inline bool d_need_lookup(struct dentry *dentry)
 extern void d_clear_need_lookup(struct dentry *dentry);
 
 extern int sysctl_vfs_cache_pressure;
+
+struct name_snapshot {
+	const char *name;
+	char inline_name[DNAME_INLINE_LEN];
+};
+void take_dentry_name_snapshot(struct name_snapshot *, struct dentry *);
+void release_dentry_name_snapshot(struct name_snapshot *);
 
 #endif	/* __LINUX_DCACHE_H */

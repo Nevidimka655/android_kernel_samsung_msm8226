@@ -345,6 +345,7 @@ int udpv6_recvmsg(struct kiocb *iocb, struct sock *sk,
 	int peeked, off = 0;
 	int err;
 	int is_udplite = IS_UDPLITE(sk);
+	bool checksum_valid = false;
 	int is_udp4;
 	bool slow;
 
@@ -379,15 +380,17 @@ try_again:
 	 */
 
 	if (copied < ulen || UDP_SKB_CB(skb)->partial_cov) {
-		if (udp_lib_checksum_complete(skb))
+		checksum_valid = !udp_lib_checksum_complete(skb);
+		if (!checksum_valid)
 			goto csum_copy_err;
 	}
 
-	if (skb_csum_unnecessary(skb))
+	if (checksum_valid || skb_csum_unnecessary(skb))
 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr),
 					      msg->msg_iov, copied       );
 	else {
-		err = skb_copy_and_csum_datagram_iovec(skb, sizeof(struct udphdr), msg->msg_iov);
+		err = skb_copy_and_csum_datagram_iovec(skb, sizeof(struct udphdr),
+						       msg->msg_iov, copied);
 		if (err == -EINVAL)
 			goto csum_copy_err;
 	}
@@ -454,6 +457,7 @@ csum_copy_err:
 	}
 	unlock_sock_fast(sk, slow);
 
+	
 	/* starting over for a new packet, but check if we need to yield */
 	cond_resched();
 	msg->msg_flags &= ~MSG_TRUNC;
@@ -958,7 +962,6 @@ int udpv6_sendmsg(struct kiocb *iocb, struct sock *sk,
 	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) msg->msg_name;
 	struct in6_addr *daddr, *final_p, final;
 	struct ipv6_txoptions *opt = NULL;
-	struct ipv6_txoptions *opt_to_free = NULL;
 	struct ip6_flowlabel *flowlabel = NULL;
 	struct flowi6 fl6;
 	struct dst_entry *dst;
@@ -1113,10 +1116,8 @@ do_udp_sendmsg:
 			opt = NULL;
 		connected = 0;
 	}
-	if (!opt) {
-		opt = txopt_get(np);
-		opt_to_free = opt;
-	}
+	if (opt == NULL)
+		opt = np->opt;
 	if (flowlabel)
 		opt = fl6_merge_options(&opt_space, flowlabel, opt);
 	opt = ipv6_fixup_options(&opt_space, opt);
@@ -1217,7 +1218,6 @@ do_append_data:
 out:
 	dst_release(dst);
 	fl6_sock_release(flowlabel);
-	txopt_put(opt_to_free);
 	if (!err)
 		return len;
 	/*
@@ -1465,17 +1465,6 @@ void udp6_proc_exit(struct net *net) {
 }
 #endif /* CONFIG_PROC_FS */
 
-void udp_v6_clear_sk(struct sock *sk, int size)
-{
-	struct inet_sock *inet = inet_sk(sk);
-
-	/* we do not want to clear pinet6 field, because of RCU lookups */
-	sk_prot_clear_portaddr_nulls(sk, offsetof(struct inet_sock, pinet6));
-
-	size -= offsetof(struct inet_sock, pinet6) + sizeof(inet->pinet6);
-	memset(&inet->pinet6 + 1, 0, size);
-}
-
 /* ------------------------------------------------------------------------ */
 
 struct proto udpv6_prot = {
@@ -1506,7 +1495,7 @@ struct proto udpv6_prot = {
 	.compat_setsockopt = compat_udpv6_setsockopt,
 	.compat_getsockopt = compat_udpv6_getsockopt,
 #endif
-	.clear_sk	   = udp_v6_clear_sk,
+	.clear_sk	   = sk_prot_clear_portaddr_nulls,
 };
 
 static struct inet_protosw udpv6_protosw = {

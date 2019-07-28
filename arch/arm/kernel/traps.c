@@ -25,6 +25,7 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/sched.h>
+#include <linux/bug.h>
 
 #include <linux/atomic.h>
 #include <asm/cacheflush.h>
@@ -34,6 +35,13 @@
 #include <asm/unwind.h>
 #include <asm/tls.h>
 #include <asm/system_misc.h>
+
+#include "signal.h"
+#ifdef CONFIG_SEC_DEBUG
+#include <mach/sec_debug.h>
+#endif
+
+#include <trace/events/exception.h>
 
 static const char *handler[]= { "prefetch abort", "data abort", "address exception", "interrupt" };
 
@@ -251,6 +259,20 @@ static int __die(const char *str, int err, struct thread_info *thread, struct pt
 		TASK_COMM_LEN, tsk->comm, task_pid_nr(tsk), thread + 1);
 
 	if (!user_mode(regs) || in_interrupt()) {
+#ifndef CONFIG_SEC_DEBUG
+		dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
+			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
+#else
+		if (THREAD_SIZE + (unsigned long)task_stack_page(tsk) - regs->ARM_sp
+			> THREAD_SIZE) {
+			dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
+					THREAD_SIZE/4 + regs->ARM_sp);
+		} else {
+			dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
+					THREAD_SIZE + (unsigned long)task_stack_page(tsk));
+		}
+#endif
+
 		dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
 			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
 		dump_backtrace(regs, tsk);
@@ -274,6 +296,9 @@ void die(const char *str, struct pt_regs *regs, int err)
 	oops_enter();
 
 	raw_spin_lock_irq(&die_lock);
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("!!die!!");
+#endif
 	console_verbose();
 	bust_spinlocks(1);
 	if (!user_mode(regs))
@@ -281,6 +306,10 @@ void die(const char *str, struct pt_regs *regs, int err)
 	if (bug_type != BUG_TRAP_TYPE_NONE)
 		str = "Oops - BUG";
 	ret = __die(str, err, thread, regs);
+#ifdef CONFIG_SEC_DEBUG_SUBSYS
+	sec_debug_save_die_info(str, regs);
+#endif
+
 
 	if (regs && kexec_should_crash(thread->task))
 		crash_kexec(regs);
@@ -368,9 +397,17 @@ static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 
 asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 {
+	unsigned int correction = thumb_mode(regs) ? 2 : 4;
 	unsigned int instr;
 	siginfo_t info;
 	void __user *pc;
+
+	/*
+	 * According to the ARM ARM, PC is 2 or 4 bytes ahead,
+	 * depending whether we're in Thumb mode or not.
+	 * Correct this offset.
+	 */
+	regs->ARM_pc -= correction;
 
 	pc = (void __user *)instruction_pointer(regs);
 
@@ -386,23 +423,22 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 #endif
 			instr = *(u32 *) pc;
 	} else if (thumb_mode(regs)) {
-		if (get_user(instr, (u16 __user *)pc))
-			goto die_sig;
+		get_user(instr, (u16 __user *)pc);
 		if (is_wide_instruction(instr)) {
 			unsigned int instr2;
-			if (get_user(instr2, (u16 __user *)pc+1))
-				goto die_sig;
+			get_user(instr2, (u16 __user *)pc+1);
 			instr <<= 16;
 			instr |= instr2;
 		}
-	} else if (get_user(instr, (u32 __user *)pc)) {
-		goto die_sig;
+	} else {
+		get_user(instr, (u32 __user *)pc);
 	}
 
 	if (call_undef_hook(regs, instr) == 0)
 		return;
 
-die_sig:
+	trace_undef_instr(regs, (void *)pc);
+
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_UNDEFINED) {
 		printk(KERN_INFO "%s (%d): undefined instruction: pc=%p\n",
@@ -506,10 +542,6 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	struct thread_info *thread = current_thread_info();
 	siginfo_t info;
 
-	/* Emulate/fallthrough. */
-	if (no == -1)
-		return regs->ARM_r0;
-
 	if ((no >> 16) != (__ARM_NR_BASE>> 16))
 		return bad_syscall(no, regs);
 
@@ -559,7 +591,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 		return regs->ARM_r0;
 
 	case NR(set_tls):
-		thread->tp_value = regs->ARM_r0;
+		thread->tp_value[0] = regs->ARM_r0;
 		if (tls_emu)
 			return 0;
 		if (has_tls_reg) {
@@ -677,7 +709,7 @@ static int get_tp_trap(struct pt_regs *regs, unsigned int instr)
 	int reg = (instr >> 12) & 15;
 	if (reg == 15)
 		return 1;
-	regs->uregs[reg] = current_thread_info()->tp_value;
+	regs->uregs[reg] = current_thread_info()->tp_value[0];
 	regs->ARM_pc += 4;
 	return 0;
 }
@@ -760,6 +792,7 @@ void __pgd_error(const char *file, int line, pgd_t pgd)
 asmlinkage void __div0(void)
 {
 	printk("Division by zero in kernel.\n");
+	BUG_ON(PANIC_CORRUPTION);
 	dump_stack();
 }
 EXPORT_SYMBOL(__div0);

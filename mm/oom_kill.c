@@ -562,11 +562,11 @@ void mem_cgroup_out_of_memory(struct mem_cgroup *memcg, gfp_t gfp_mask,
 	struct task_struct *p;
 
 	/*
-	 * If current has a pending SIGKILL or is exiting, then automatically
-	 * select it.  The goal is to allow it to allocate so that it may
-	 * quickly exit and free its memory.
+	 * If current has a pending SIGKILL, then automatically select it.  The
+	 * goal is to allow it to allocate so that it may quickly exit and free
+	 * its memory.
 	 */
-	if (fatal_signal_pending(current) || current->flags & PF_EXITING) {
+	if (fatal_signal_pending(current)) {
 		set_thread_flag(TIF_MEMDIE);
 		return;
 	}
@@ -683,6 +683,10 @@ static void clear_system_oom(void)
 	spin_unlock(&zone_scan_lock);
 }
 
+#if defined(CONFIG_SEC_SLOWPATH)
+extern unsigned int oomk_state; /* 0 none, bit_0 time's up, bit_1 OOMK */
+#endif
+
 /**
  * out_of_memory - kill the "best" process when we run out of memory
  * @zonelist: zonelist pointer
@@ -706,6 +710,10 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 	unsigned int points;
 	enum oom_constraint constraint = CONSTRAINT_NONE;
 	int killed = 0;
+
+#if defined(CONFIG_SEC_SLOWPATH)
+	oomk_state |= 0x02;
+#endif
 
 	blocking_notifier_call_chain(&oom_notify_list, 0, &freed);
 	if (freed > 0)

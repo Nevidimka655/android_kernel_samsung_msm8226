@@ -14,6 +14,10 @@
 #include <linux/timer.h>
 
 #include <asm/sched_clock.h>
+#ifdef CONFIG_SEC_DEBUG
+#include <mach/sec_debug.h>
+extern void sec_debug_save_last_ns(unsigned long long last_ns);
+#endif
 
 struct clock_data {
 	u64 epoch_ns;
@@ -68,7 +72,9 @@ static unsigned long long cyc_to_sched_clock(u32 cyc, u32 mask)
 		smp_rmb();
 	} while (epoch_cyc != cd.epoch_cyc_copy);
 
-	return epoch_ns + cyc_to_ns((cyc - epoch_cyc) & mask, cd.mult, cd.shift);
+	cyc = read_sched_clock();
+	cyc = (cyc - epoch_cyc) & sched_clock_mask;
+	return epoch_ns + cyc_to_ns(cyc, cd.mult, cd.shift);
 }
 
 /*
@@ -101,13 +107,6 @@ static void sched_clock_poll(unsigned long wrap_ticks)
 {
 	mod_timer(&sched_clock_timer, round_jiffies(jiffies + wrap_ticks));
 	update_sched_clock();
-}
-
-void __init setup_sched_clock_needs_suspend(u32 (*read)(void), int bits,
-		unsigned long rate)
-{
-	setup_sched_clock(read, bits, rate);
-	cd.needs_suspend = true;
 }
 
 void __init setup_sched_clock(u32 (*read)(void), int bits, unsigned long rate)
@@ -163,6 +162,12 @@ void __init setup_sched_clock(u32 (*read)(void), int bits, unsigned long rate)
 unsigned long long notrace sched_clock(void)
 {
 	u32 cyc = read_sched_clock();
+#ifdef CONFIG_SEC_DEBUG
+	u64 local = cyc_to_sched_clock(cyc, sched_clock_mask);
+	sec_debug_save_last_ns(local);
+	return local;
+#endif
+
 	return cyc_to_sched_clock(cyc, sched_clock_mask);
 }
 
@@ -181,18 +186,15 @@ void __init sched_clock_postinit(void)
 static int sched_clock_suspend(void)
 {
 	sched_clock_poll(sched_clock_timer.data);
-	if (cd.needs_suspend)
-		cd.suspended = true;
+	cd.suspended = true;
 	return 0;
 }
 
 static void sched_clock_resume(void)
 {
-	if (cd.needs_suspend) {
-		cd.epoch_cyc = read_sched_clock();
-		cd.epoch_cyc_copy = cd.epoch_cyc;
-		cd.suspended = false;
-	}
+	cd.epoch_cyc = read_sched_clock();
+	cd.epoch_cyc_copy = cd.epoch_cyc;
+	cd.suspended = false;
 }
 
 static struct syscore_ops sched_clock_ops = {
